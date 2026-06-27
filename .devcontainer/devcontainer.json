@@ -1,0 +1,37 @@
+{
+  "name": "XIAO nRF54L15 samples (NCS v3.3.0)",
+
+  // Prebuilt nRF Connect SDK image (NCS source baked in). Built/published by
+  // https://github.com/zhixuan2333/ncs-container
+  "image": "ghcr.io/zhixuan2333/ncs-container:v3.3.0",
+
+  "remoteUser": "root",
+  "workspaceFolder": "/workspaces/xiao-nrf54l15-samples",
+
+  "containerEnv": {
+    "NCS_VERSION": "v3.3.0",
+    "ZEPHYR_BASE": "/opt/ncs/v3.3.0/zephyr",
+    "NCS_WORKSPACE": "/opt/ncs/v3.3.0",
+    "BOARD": "xiao_nrf54l15/nrf54l15/cpuapp"
+  },
+
+  // Ports the local OpenOCD/serial bridge reverse-tunnels in.
+  "forwardPorts": [3333, 4444, 4555],
+  "portsAttributes": {
+    "3333": { "label": "OpenOCD GDB", "onAutoForward": "ignore" },
+    "4444": { "label": "OpenOCD telnet", "onAutoForward": "ignore" },
+    "4555": { "label": "Serial bridge", "onAutoForward": "ignore" }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "nordic-semiconductor.nrf-connect-extension-pack",
+        "marus25.cortex-debug",
+        "ms-vscode.cpptools"
+      ]
+    }
+  },
+
+  "postCreateCommand": "bash .devcontainer/post-create.sh"
+}

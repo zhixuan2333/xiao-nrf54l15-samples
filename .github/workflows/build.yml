@@ -1,0 +1,40 @@
+name: Build samples
+
+# Compiles both samples for the XIAO nRF54L15 inside the same prebuilt image the
+# dev container uses, proving the toolchain + board + sources line up.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/zhixuan2333/ncs-container:v3.3.0
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [hello_world, blinky]
+    env:
+      BOARD: xiao_nrf54l15/nrf54l15/cpuapp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.app }}
+        run: |
+          source /opt/toolchain-env.sh
+          git config --global --add safe.directory '*'
+          west build -b "$BOARD" "apps/${{ matrix.app }}" -d "build-${{ matrix.app }}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.app }}-xiao_nrf54l15
+          path: |
+            build-${{ matrix.app }}/zephyr/zephyr.elf
+            build-${{ matrix.app }}/zephyr/zephyr.hex
+            build-${{ matrix.app }}/zephyr/zephyr.bin
+          if-no-files-found: warn
