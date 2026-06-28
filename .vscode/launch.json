@@ -1,0 +1,27 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // One-click Flash + Debug over the tunneled remote OpenOCD GDB server.
+      // Requires scripts/host-bridge.sh running on your local machine.
+      "name": "Flash & Debug (remote OpenOCD :3333)",
+      "type": "cortex-debug",
+      "request": "launch",
+      "servertype": "external",
+      "gdbTarget": "localhost:3333",
+      "cwd": "${workspaceFolder}",
+      "executable": "${workspaceFolder}/build/zephyr/zephyr.elf",
+      "gdbPath": "${workspaceFolder}/scripts/zephyr-gdb",
+      "runToEntryPoint": "main",
+      // Replace cortex-debug's default flash sequence: enable nRF54L RRAM write,
+      // then load the image, then halt at reset.
+      "overrideLaunchCommands": [
+        "monitor reset halt",
+        "monitor mww 0x5004b500 0x101",
+        "load",
+        "monitor reset halt"
+      ],
+      "overrideRestartCommands": ["monitor reset halt"]
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // Bound to the nRF Connect "Flash" action via .vscode/settings.json
+      // (nrf-connect.taskBindings). Flashes the active build over the tunneled
+      // remote OpenOCD using scripts/flash.sh.
+      "label": "Flash (remote OpenOCD)",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/flash.sh",
+      "args": [],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    }
+  ]
+}

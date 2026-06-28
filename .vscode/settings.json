@@ -1,0 +1,15 @@
+{
+  // Rebind the nRF Connect "Flash" action (toolbar button / shortcut) to run the
+  // remote-OpenOCD flash task instead of the default nrfutil/J-Link runner.
+  //
+  // This is the array form documented for current nRF Connect for VS Code. If
+  // your extension version uses the older object-map form, replace with:
+  //   "nrf-connect.taskBindings": { "flash": [ { "taskName": "Flash (remote OpenOCD)" } ] }
+  "nrf-connect.taskBindings": [
+    {
+      "action": "flash",
+      "taskName": "Flash (remote OpenOCD)",
+      "buildConfigs": ["all"]
+    }
+  ]
+}
