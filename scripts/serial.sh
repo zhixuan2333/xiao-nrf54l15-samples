@@ -17,10 +17,20 @@ if ! nc -z localhost "$SERIAL_TCP" 2>/dev/null; then
   exit 1
 fi
 
-echo "Serial console -> $HOSTPORT   (tio: Ctrl-t q to quit | socat: Ctrl-])"
-if command -v tio >/dev/null 2>&1; then
-  # tio >= 2.x can attach directly to a TCP socket.
-  exec tio "tcp://${HOSTPORT}"
+# Attach to the TCP socket. We use socat, not tio: tio's `tcp://` URL support is
+# version-dependent (tio 2.7 treats it as a serial *device path* and fails),
+# whereas socat handles the socket reliably and bidirectionally.
+if command -v socat >/dev/null 2>&1; then
+  if [ -t 0 ]; then
+    # Interactive terminal: raw mode so keystrokes pass straight through.
+    echo "Serial console -> $HOSTPORT   (press Ctrl-] to quit)"
+    exec socat -,raw,echo=0,escape=0x1d "TCP:${HOSTPORT}"
+  else
+    # Non-TTY (piped / non-interactive): stream without termios.
+    echo "Serial console -> $HOSTPORT   (non-interactive stream)"
+    exec socat STDIO "TCP:${HOSTPORT}"
+  fi
 else
-  exec socat -,raw,echo=0,escape=0x1d "TCP:${HOSTPORT}"
+  echo "Serial console -> $HOSTPORT   (read-only via nc; Ctrl-C to quit)"
+  exec nc localhost "$SERIAL_TCP"
 fi
