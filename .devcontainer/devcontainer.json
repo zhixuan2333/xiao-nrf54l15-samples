@@ -8,6 +8,12 @@
   "remoteUser": "root",
   "workspaceFolder": "/workspaces/xiao-nrf54l15-samples",
 
+  // sshd is required for `gh codespace ssh -R` (the reverse tunnel used by
+  // scripts/host-bridge.sh to reach your local OpenOCD/serial bridge).
+  "features": {
+    "ghcr.io/devcontainers/features/sshd:1": {}
+  },
+
   "containerEnv": {
     "NCS_VERSION": "v3.3.0",
     "ZEPHYR_BASE": "/opt/ncs/v3.3.0/zephyr",

@@ -95,7 +95,7 @@ openocd \
   -c "gdb_port $GDB_PORT" \
   -c "telnet_port $TELNET_PORT" \
   -c "tcl_port disabled" \
-  "${OPENOCD_EXTRA[@]}" &
+  ${OPENOCD_EXTRA[@]+"${OPENOCD_EXTRA[@]}"} &
 PIDS+=($!)
 sleep 1
 
