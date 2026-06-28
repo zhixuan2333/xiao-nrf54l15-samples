@@ -28,9 +28,10 @@ Board target: **`xiao_nrf54l15/nrf54l15/cpuapp`**
    ```bash
    ./scripts/host-bridge.sh <codespace-name>
    ```
-   This runs OpenOCD (`target/nordic/nrf54l.cfg`) + a serial bridge locally and
-   reverse-tunnels them into the Codespace. Find the name with `gh codespace list`.
-   Needs `gh`, `openocd`, `socat` locally — see the [ncs-container README](https://github.com/zhixuan2333/ncs-container#readme).
+   This runs OpenOCD (bundled self-contained `openocd/xiao_nrf54l15.cfg`, works
+   with stock OpenOCD 0.12.0) + a serial bridge locally and reverse-tunnels them
+   into the Codespace. Find the name with `gh codespace list`. Needs `gh`,
+   `openocd`, `socat` locally — see the [ncs-container README](https://github.com/zhixuan2333/ncs-container#readme).
 
 4. **Flash / serial / debug** (inside the Codespace):
    ```bash
@@ -38,9 +39,24 @@ Board target: **`xiao_nrf54l15/nrf54l15/cpuapp`**
    ./scripts/serial.sh       # watch the console (Hello World / blink logs)
    ./scripts/debug.sh        # interactive arm-zephyr-eabi-gdb
    ```
+   Or click **Flash** in the nRF Connect for VS Code toolbar — it's rebound (via
+   `.vscode/settings.json`) to flash over the remote OpenOCD. The **Flash & Debug
+   (remote OpenOCD :3333)** launch config gives one-click debug.
 
-> nRF54L OpenOCD flashing needs a recent OpenOCD with the nRF54 NVM/RRAM driver.
-> Check `openocd --version` on your local machine; install a current build if older.
+## Multiple boards
+
+Name your probes in [`bridge-devices.conf`](bridge-devices.conf), then select one
+by label (or probe serial). Each device gets its own port set, so several can run
+at once:
+
+```bash
+./scripts/host-bridge.sh --list                 # discover probe serials
+./scripts/host-bridge.sh <codespace> --device xiao_a    # local, board A
+./scripts/host-bridge.sh <codespace> --device xiao_b    # local, board B (other terminal)
+# inside the Codespace, target a specific board:
+./scripts/flash.sh  --device xiao_b
+./scripts/serial.sh --device xiao_b
+```
 
 ---
 
