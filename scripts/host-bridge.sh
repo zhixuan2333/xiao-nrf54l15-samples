@@ -111,6 +111,10 @@ free_port() {
 }
 echo "Cleaning up stale local OpenOCD/serial/tunnels..." >&2
 free_port "$GDB_PORT"; free_port "$TELNET_PORT"; free_port "$SERIAL_TCP"
+# Kill leftover socat children that may still hold the serial device (these can
+# linger past a port free and steal serial bytes on the next run).
+pkill -f "socat .*${SERIAL_TCP}" 2>/dev/null || true
+[ -n "${SERIAL_PORT:-}" ] && pkill -f "socat .*${SERIAL_PORT}" 2>/dev/null || true
 pkill -f "codespace ssh -c ${CODESPACE}" 2>/dev/null || true
 sleep 1
 # Raise the fd limit so the SSH reverse tunnel can handle many short-lived
@@ -172,7 +176,10 @@ if [ -n "${SERIAL_PORT:-}" ] && [ -e "$SERIAL_PORT" ]; then
   else
     SER_OPTS="b${SERIAL_BAUD},raw,echo=0,clocal=1"
   fi
-  socat "TCP-LISTEN:${SERIAL_TCP},reuseaddr,fork" \
+  # max-children=1: a serial port has ONE byte stream — allowing a second reader
+  # (e.g. VS Code auto-forwarding the same port) makes them steal bytes from each
+  # other and the console turns to garbage. Enforce a single attached reader.
+  socat "TCP-LISTEN:${SERIAL_TCP},reuseaddr,fork,max-children=1" \
         "FILE:${SERIAL_PORT},${SER_OPTS}" &
   PIDS+=($!)
   TUNNEL_ARGS+=(-R "${SERIAL_TCP}:localhost:${SERIAL_TCP}")
