@@ -80,7 +80,9 @@ fi
 # ---------------------------------------------------------------------------
 detect_serial() {
   if [ "$(uname)" = "Darwin" ]; then
-    ls /dev/tty.usbmodem* /dev/tty.usbserial* 2>/dev/null | head -n1
+    # Use the call-out (cu.*) device, NOT tty.* — tty.* blocks on carrier-detect
+    # and yields no data for USB CDC serial.
+    ls /dev/cu.usbmodem* /dev/cu.usbserial* 2>/dev/null | head -n1
   else
     ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | head -n1
   fi
@@ -94,6 +96,26 @@ cleanup() {
   wait 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
+
+# ---------------------------------------------------------------------------
+# Pre-flight: clear stale OpenOCD / socat / tunnels left by previous runs.
+# (These cause "Address already in use" and connect storms on re-run.)
+# ---------------------------------------------------------------------------
+free_port() {
+  local p="$1" pids
+  pids="$(lsof -ti "tcp:$p" 2>/dev/null || true)"
+  if [ -n "$pids" ]; then
+    echo "  freeing stale tcp:$p (pids: $pids)" >&2
+    kill $pids 2>/dev/null || true
+  fi
+}
+echo "Cleaning up stale local OpenOCD/serial/tunnels..." >&2
+free_port "$GDB_PORT"; free_port "$TELNET_PORT"; free_port "$SERIAL_TCP"
+pkill -f "codespace ssh -c ${CODESPACE}" 2>/dev/null || true
+sleep 1
+# Raise the fd limit so the SSH reverse tunnel can handle many short-lived
+# gdb connections without "Too many open files".
+ulimit -n 4096 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # 1) OpenOCD
@@ -119,8 +141,19 @@ openocd \
   -c "telnet_port $TELNET_PORT" \
   -c "tcl_port disabled" \
   ${OPENOCD_EXTRA[@]+"${OPENOCD_EXTRA[@]}"} &
-PIDS+=($!)
-sleep 1
+OPENOCD_PID=$!
+PIDS+=($OPENOCD_PID)
+
+# Wait for the GDB server to come up; fail loudly if it didn't (bad probe,
+# port still busy, missing cfg) instead of tunneling a dead endpoint.
+for _ in $(seq 1 20); do
+  nc -z localhost "$GDB_PORT" 2>/dev/null && break
+  kill -0 "$OPENOCD_PID" 2>/dev/null || die "OpenOCD exited — see its output above (probe connected? ports free?)"
+  sleep 0.5
+done
+nc -z localhost "$GDB_PORT" 2>/dev/null \
+  || die "OpenOCD GDB server never opened on :$GDB_PORT — check the OpenOCD output above"
+echo "✓ OpenOCD GDB server listening on :$GDB_PORT" >&2
 
 # ---------------------------------------------------------------------------
 # 2) Serial -> TCP bridge
@@ -128,8 +161,19 @@ sleep 1
 TUNNEL_ARGS=(-R "${GDB_PORT}:localhost:${GDB_PORT}" -R "${TELNET_PORT}:localhost:${TELNET_PORT}")
 if [ -n "${SERIAL_PORT:-}" ] && [ -e "$SERIAL_PORT" ]; then
   echo "▶ Serial   : $SERIAL_PORT @ ${SERIAL_BAUD}  ->  tcp:$SERIAL_TCP" >&2
+  # socat serial termios options differ by build/OS:
+  #  * macOS / socat >= 1.8: numeric ispeed/ospeed + cfmakeraw (b<rate> removed).
+  #  * Linux / socat 1.7.x: the classic b<rate> shorthand.
+  # Override entirely with SERIAL_SOCAT_OPTS=... if your socat needs something else.
+  if [ -n "${SERIAL_SOCAT_OPTS:-}" ]; then
+    SER_OPTS="$SERIAL_SOCAT_OPTS"
+  elif [ "$(uname)" = "Darwin" ]; then
+    SER_OPTS="cfmakeraw,ispeed=${SERIAL_BAUD},ospeed=${SERIAL_BAUD},clocal=1"
+  else
+    SER_OPTS="b${SERIAL_BAUD},raw,echo=0,clocal=1"
+  fi
   socat "TCP-LISTEN:${SERIAL_TCP},reuseaddr,fork" \
-        "FILE:${SERIAL_PORT},b${SERIAL_BAUD},raw,echo=0" &
+        "FILE:${SERIAL_PORT},${SER_OPTS}" &
   PIDS+=($!)
   TUNNEL_ARGS+=(-R "${SERIAL_TCP}:localhost:${SERIAL_TCP}")
 else
@@ -142,4 +186,10 @@ fi
 echo "▶ Tunnel   : reverse-forwarding into Codespace '$CODESPACE'" >&2
 echo "  Inside the Codespace: ./scripts/flash.sh   ./scripts/debug.sh   ./scripts/serial.sh" >&2
 echo "  Press Ctrl-C to stop." >&2
-gh codespace ssh -c "$CODESPACE" -- -N "${TUNNEL_ARGS[@]}"
+# ExitOnForwardFailure makes a port already bound on the Codespace side (e.g. a
+# leftover tunnel) a hard, visible error rather than a silent dead forward.
+gh codespace ssh -c "$CODESPACE" -- -N \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  "${TUNNEL_ARGS[@]}"

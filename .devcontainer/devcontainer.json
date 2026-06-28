@@ -21,13 +21,9 @@
     "BOARD": "xiao_nrf54l15/nrf54l15/cpuapp"
   },
 
-  // Ports the local OpenOCD/serial bridge reverse-tunnels in.
-  "forwardPorts": [3333, 4444, 4555],
-  "portsAttributes": {
-    "3333": { "label": "OpenOCD GDB", "onAutoForward": "ignore" },
-    "4444": { "label": "OpenOCD telnet", "onAutoForward": "ignore" },
-    "4555": { "label": "Serial bridge", "onAutoForward": "ignore" }
-  },
+  // NOTE: do NOT add forwardPorts for 3333/4444/4555. Those ports are provided
+  // by the SSH reverse tunnel (scripts/host-bridge.sh); VS Code auto-forwarding
+  // the same ports fights the tunnel and causes connection storms.
 
   "customizations": {
     "vscode": {
