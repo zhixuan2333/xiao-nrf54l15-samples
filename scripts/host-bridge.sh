@@ -16,8 +16,9 @@
 #   ./scripts/host-bridge.sh [CODESPACE_NAME]
 #
 # Configure the probe/target with env vars (defaults shown):
-#   OPENOCD_INTERFACE=interface/cmsis-dap.cfg
-#   OPENOCD_TARGET=target/nordic/nrf54l.cfg   # XIAO nRF54L15; see ./openocd for others
+#   OPENOCD_CFG=<repo>/openocd/xiao_nrf54l15.cfg  # self-contained board cfg (default)
+#   OPENOCD_INTERFACE=cmsis-dap            # bare probe name: cmsis-dap / jlink / stlink
+#   OPENOCD_TARGET=                        # set e.g. target/nrf52.cfg for two-file mode
 #   SERIAL_PORT=<auto-detected>            # e.g. /dev/tty.usbmodemXXXX, /dev/ttyACM0
 #   SERIAL_BAUD=115200
 #   GDB_PORT=3333  TELNET_PORT=4444  SERIAL_TCP=4555
@@ -26,10 +27,19 @@
 #   ./scripts/host-bridge.sh my-codespace -- -c "init; reset"
 set -euo pipefail
 
-# Defaults target the Seeed XIAO nRF54L15 over a CMSIS-DAP probe. Override with
-# env vars for any other OpenOCD-supported board (see openocd/README.md).
-OPENOCD_INTERFACE="${OPENOCD_INTERFACE:-interface/cmsis-dap.cfg}"
-OPENOCD_TARGET="${OPENOCD_TARGET:-target/nordic/nrf54l.cfg}"
+# This script lives in <repo>/scripts/.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# OpenOCD config — two modes:
+#  * Self-contained board cfg (DEFAULT): a single .cfg that wires up probe +
+#    target on its own. Default = bundled XIAO nRF54L15 config, which works with
+#    stock OpenOCD 0.12.0 (no target/nordic/nrf54l.cfg needed). It selects the
+#    probe from $OPENOCD_INTERFACE (a bare name like cmsis-dap / jlink / stlink).
+#  * Two-file mode: set OPENOCD_TARGET (e.g. target/nrf52.cfg) to use the classic
+#    interface + target pair for any other OpenOCD-supported SoC.
+OPENOCD_CFG="${OPENOCD_CFG:-$REPO/openocd/xiao_nrf54l15.cfg}"
+OPENOCD_INTERFACE="${OPENOCD_INTERFACE:-cmsis-dap}"
+OPENOCD_TARGET="${OPENOCD_TARGET:-}"
 SERIAL_BAUD="${SERIAL_BAUD:-115200}"
 GDB_PORT="${GDB_PORT:-3333}"
 TELNET_PORT="${TELNET_PORT:-4444}"
@@ -88,10 +98,23 @@ trap cleanup EXIT INT TERM
 # ---------------------------------------------------------------------------
 # 1) OpenOCD
 # ---------------------------------------------------------------------------
-echo "▶ OpenOCD  : $OPENOCD_INTERFACE + $OPENOCD_TARGET  (gdb:$GDB_PORT telnet:$TELNET_PORT)" >&2
+if [ -n "$OPENOCD_TARGET" ]; then
+  # Two-file mode. Accept a bare probe name or a full cfg path for the interface.
+  case "$OPENOCD_INTERFACE" in
+    */*) IFACE_FILE="$OPENOCD_INTERFACE" ;;
+    *)   IFACE_FILE="interface/${OPENOCD_INTERFACE}.cfg" ;;
+  esac
+  echo "▶ OpenOCD  : $IFACE_FILE + $OPENOCD_TARGET  (gdb:$GDB_PORT telnet:$TELNET_PORT)" >&2
+  OCD_FILES=(-f "$IFACE_FILE" -f "$OPENOCD_TARGET")
+else
+  # Self-contained board cfg. It reads $OPENOCD_INTERFACE (bare name) internally.
+  [ -f "$OPENOCD_CFG" ] || die "OpenOCD config not found: $OPENOCD_CFG"
+  export OPENOCD_INTERFACE
+  echo "▶ OpenOCD  : $OPENOCD_CFG (probe=$OPENOCD_INTERFACE)  (gdb:$GDB_PORT telnet:$TELNET_PORT)" >&2
+  OCD_FILES=(-f "$OPENOCD_CFG")
+fi
 openocd \
-  -f "$OPENOCD_INTERFACE" \
-  -f "$OPENOCD_TARGET" \
+  "${OCD_FILES[@]}" \
   -c "gdb_port $GDB_PORT" \
   -c "telnet_port $TELNET_PORT" \
   -c "tcl_port disabled" \
