@@ -4,9 +4,26 @@
 # Run INSIDE the Codespace, after ./scripts/host-bridge.sh is up on your host.
 #
 # The local socat bridge exposes the UART as a TCP socket; here we attach to it.
-# Usage:  ./scripts/serial.sh        (Ctrl-] or Ctrl-C to quit, depending on tool)
+# Usage:  ./scripts/serial.sh [--device LABEL]      (press Ctrl-] to quit)
+#
+# --device LABEL selects a multi-device target by its label (or probe serial) in
+# bridge-devices.conf, which sets SERIAL_TCP to 4555+index for that device.
 set -euo pipefail
 
+DEVICES_CONF="${DEVICES_CONF:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bridge-devices.conf}"
+DEVICE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -d|--device) DEVICE="${2:-}"; shift 2 ;;
+    --device=*)  DEVICE="${1#*=}"; shift ;;
+    *)           shift ;;
+  esac
+done
+if [ -n "$DEVICE" ]; then
+  IDX="$(awk -v k="$DEVICE" '!/^[[:space:]]*#/ && NF { if ($1==k||$2==k){print ($3==""?0:$3); exit} }' "$DEVICES_CONF" 2>/dev/null || true)"
+  [ -n "${IDX:-}" ] || IDX=0
+  SERIAL_TCP="${SERIAL_TCP:-$((4555 + IDX))}"
+fi
 SERIAL_TCP="${SERIAL_TCP:-4555}"
 HOSTPORT="localhost:${SERIAL_TCP}"
 

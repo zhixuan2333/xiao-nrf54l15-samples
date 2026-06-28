@@ -13,15 +13,26 @@
 # Requirements on the local host:  gh, openocd, socat  (a debug probe for SWD).
 #
 # Usage:
-#   ./scripts/host-bridge.sh [CODESPACE_NAME]
+#   ./scripts/host-bridge.sh [CODESPACE_NAME] [--device LABEL|SERIAL]
+#   ./scripts/host-bridge.sh --list          # list connected probes + configured devices
+#
+# MULTI-DEVICE: with several probes plugged in, pick one by a custom label or by
+# its probe serial. Labels live in bridge-devices.conf (committed, so the
+# Codespace resolves them too):
+#       # label    probe_serial   index
+#       xiao_a      E81ECDC6       0
+#       xiao_b      A1B2C3D4       1
+# Each index offsets the ports (gdb 3333+i, telnet 4444+i, serial 4555+i), so you
+# can run one bridge per device at once. OpenOCD binds the exact probe by serial.
 #
 # Configure the probe/target with env vars (defaults shown):
 #   OPENOCD_CFG=<repo>/openocd/xiao_nrf54l15.cfg  # self-contained board cfg (default)
 #   OPENOCD_INTERFACE=cmsis-dap            # bare probe name: cmsis-dap / jlink / stlink
+#   OPENOCD_SERIAL=                        # probe serial (set automatically by --device)
 #   OPENOCD_TARGET=                        # set e.g. target/nrf52.cfg for two-file mode
-#   SERIAL_PORT=<auto-detected>            # e.g. /dev/tty.usbmodemXXXX, /dev/ttyACM0
+#   SERIAL_PORT=<auto-detected>            # e.g. /dev/cu.usbmodemXXXX, /dev/ttyACM0
 #   SERIAL_BAUD=115200
-#   GDB_PORT=3333  TELNET_PORT=4444  SERIAL_TCP=4555
+#   GDB_PORT=3333  TELNET_PORT=4444  SERIAL_TCP=4555   (env overrides the index offset)
 #
 # Anything after `--` is passed straight to OpenOCD, e.g.:
 #   ./scripts/host-bridge.sh my-codespace -- -c "init; reset"
@@ -39,26 +50,89 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 #    interface + target pair for any other OpenOCD-supported SoC.
 OPENOCD_CFG="${OPENOCD_CFG:-$REPO/openocd/xiao_nrf54l15.cfg}"
 OPENOCD_INTERFACE="${OPENOCD_INTERFACE:-cmsis-dap}"
+OPENOCD_SERIAL="${OPENOCD_SERIAL:-}"
 OPENOCD_TARGET="${OPENOCD_TARGET:-}"
 SERIAL_BAUD="${SERIAL_BAUD:-115200}"
-GDB_PORT="${GDB_PORT:-3333}"
-TELNET_PORT="${TELNET_PORT:-4444}"
-SERIAL_TCP="${SERIAL_TCP:-4555}"
-
-# First non-flag arg is the Codespace name (optional). Everything after a `--`
-# is passed straight through to OpenOCD.
-CODESPACE=""
-if [ "${1:-}" != "--" ] && [ -n "${1:-}" ]; then
-  CODESPACE="$1"
-  shift
-fi
-if [ "${1:-}" = "--" ]; then
-  shift
-fi
-OPENOCD_EXTRA=("$@")
+DEVICES_CONF="${DEVICES_CONF:-$REPO/bridge-devices.conf}"
 
 die() { echo "error: $*" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# Argument parsing: [CODESPACE] [--device X] [--list] [-- <openocd args>]
+# ---------------------------------------------------------------------------
+DEVICE=""
+LIST=0
+CODESPACE=""
+OPENOCD_EXTRA=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -l|--list)   LIST=1; shift ;;
+    -d|--device) DEVICE="${2:-}"; shift 2 ;;
+    --device=*)  DEVICE="${1#*=}"; shift ;;
+    --)          shift; OPENOCD_EXTRA=("$@"); break ;;
+    -*)          die "unknown option: $1 (try --list)" ;;
+    *)           if [ -z "$CODESPACE" ]; then CODESPACE="$1"; else OPENOCD_EXTRA+=("$1"); fi; shift ;;
+  esac
+done
+
+# ---------------------------------------------------------------------------
+# Resolve --device against bridge-devices.conf (label or serial), then derive
+# this device's port set from its index. Explicit GDB_PORT/etc env still wins.
+# ---------------------------------------------------------------------------
+DEV_INDEX=0
+if [ -n "$DEVICE" ]; then
+  CONF_LINE="$(awk -v k="$DEVICE" '!/^[[:space:]]*#/ && NF { if ($1==k || $2==k) { print $1, $2, ($3==""?0:$3); exit } }' "$DEVICES_CONF" 2>/dev/null || true)"
+  if [ -n "$CONF_LINE" ]; then
+    read -r _RL OPENOCD_SERIAL DEV_INDEX <<<"$CONF_LINE"
+    echo "Device '$_RL' -> probe serial $OPENOCD_SERIAL (index $DEV_INDEX)" >&2
+  else
+    OPENOCD_SERIAL="$DEVICE"
+    echo "Device '$DEVICE' not in $DEVICES_CONF — using it as a probe serial (index 0)" >&2
+  fi
+fi
+GDB_PORT="${GDB_PORT:-$((3333 + DEV_INDEX))}"
+TELNET_PORT="${TELNET_PORT:-$((4444 + DEV_INDEX))}"
+SERIAL_TCP="${SERIAL_TCP:-$((4555 + DEV_INDEX))}"
 need() { command -v "$1" >/dev/null 2>&1 || die "'$1' not found on PATH. Install it first."; }
+
+# Serial-port discovery. With a probe serial, prefer the cu.* device whose name
+# embeds that serial (macOS: /dev/cu.usbmodem<SERIAL><iface>); else first found.
+detect_serial() {
+  local want="${1:-}" hit=""
+  if [ "$(uname)" = "Darwin" ]; then
+    if [ -n "$want" ]; then hit="$(ls /dev/cu.usbmodem${want}* 2>/dev/null | head -n1)"; fi
+    if [ -z "$hit" ]; then hit="$(ls /dev/cu.usbmodem* /dev/cu.usbserial* 2>/dev/null | head -n1)"; fi
+  else
+    if [ -n "$want" ]; then hit="$(ls /dev/serial/by-id/*${want}* 2>/dev/null | head -n1)"; fi
+    if [ -z "$hit" ]; then hit="$(ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | head -n1)"; fi
+  fi
+  printf '%s' "$hit"
+}
+
+list_devices() {
+  echo "Connected probes / serial ports:" >&2
+  if [ "$(uname)" = "Darwin" ]; then
+    ls /dev/cu.usbmodem* /dev/cu.usbserial* 2>/dev/null | while read -r d; do
+      # cu name = <serial><interface-digit>; drop the trailing digit for the serial.
+      suf="${d#/dev/cu.usbmodem}"
+      printf "  %-34s serial≈%s\n" "$d" "${suf%?}" >&2
+    done
+    if command -v system_profiler >/dev/null 2>&1; then
+      echo "  Exact USB serial numbers (use these in bridge-devices.conf):" >&2
+      system_profiler SPUSBDataType 2>/dev/null | awk -F': ' '/Serial Number:/{print "    " $2}' | sort -u >&2
+    fi
+  else
+    ls /dev/serial/by-id/ 2>/dev/null >&2 || ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null >&2
+  fi
+  echo "Configured devices ($DEVICES_CONF):" >&2
+  if [ -f "$DEVICES_CONF" ]; then
+    awk '!/^[[:space:]]*#/ && NF { i=($3==""?0:$3); printf "  %-12s serial=%-14s index=%s  (gdb %d, telnet %d, serial %d)\n",$1,$2,i,3333+i,4444+i,4555+i }' "$DEVICES_CONF" >&2
+  else
+    echo "  (none — create $DEVICES_CONF; see the header of this script)" >&2
+  fi
+}
+
+if [ "$LIST" = "1" ]; then list_devices; exit 0; fi
 
 need gh
 need openocd
@@ -75,19 +149,8 @@ if [ -z "$CODESPACE" ]; then
   echo "Using first Codespace: $CODESPACE" >&2
 fi
 
-# ---------------------------------------------------------------------------
-# Auto-detect the serial port if not provided.
-# ---------------------------------------------------------------------------
-detect_serial() {
-  if [ "$(uname)" = "Darwin" ]; then
-    # Use the call-out (cu.*) device, NOT tty.* — tty.* blocks on carrier-detect
-    # and yields no data for USB CDC serial.
-    ls /dev/cu.usbmodem* /dev/cu.usbserial* 2>/dev/null | head -n1
-  else
-    ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | head -n1
-  fi
-}
-SERIAL_PORT="${SERIAL_PORT:-$(detect_serial || true)}"
+# Auto-detect the serial port (for the selected probe serial, if any).
+SERIAL_PORT="${SERIAL_PORT:-$(detect_serial "$OPENOCD_SERIAL" || true)}"
 
 PIDS=()
 cleanup() {
@@ -139,8 +202,16 @@ else
   echo "▶ OpenOCD  : $OPENOCD_CFG (probe=$OPENOCD_INTERFACE)  (gdb:$GDB_PORT telnet:$TELNET_PORT)" >&2
   OCD_FILES=(-f "$OPENOCD_CFG")
 fi
+# Bind a specific probe by serial (multi-device). `adapter serial` is set after
+# the cfg (which selects the driver) and before the implicit init.
+OCD_SERIAL_ARG=()
+if [ -n "$OPENOCD_SERIAL" ]; then
+  echo "  probe serial: $OPENOCD_SERIAL" >&2
+  OCD_SERIAL_ARG=(-c "adapter serial $OPENOCD_SERIAL")
+fi
 openocd \
   "${OCD_FILES[@]}" \
+  ${OCD_SERIAL_ARG[@]+"${OCD_SERIAL_ARG[@]}"} \
   -c "gdb_port $GDB_PORT" \
   -c "telnet_port $TELNET_PORT" \
   -c "tcl_port disabled" \
